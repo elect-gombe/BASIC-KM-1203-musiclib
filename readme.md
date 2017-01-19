@@ -63,3 +63,6 @@ $ aplay <in> -r32000
 ## Global variable
  c : count playing
  s : sound buff(1024*2) 
+
+## Special thanks
+音声データ：魔王魂
