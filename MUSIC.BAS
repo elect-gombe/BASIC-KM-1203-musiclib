@@ -23,9 +23,6 @@ rem         |
 rem         - (Ground)
 rem C is 0.01uF or so.
 
-rem c : count playing
-rem s : sound buff(1024*2) 
-
 rem ==sound data format==
 rem sampling    : 32KHz
 rem channel     : 1ch
@@ -53,7 +50,51 @@ rem can use aplay command.
 rem $ aplay <in> -r32000
 
 
+rem ==gloval variables==
+ rem c : count playing
+ rem s : sound buff(1024*2) 
+
+rem ==functions==
+ rem setpwm
+  rem initialize pwm for audio
+  rem use TMR3,OC4
+  rem resolution:8bit
+ rem setbst
+  rem initialize base timer
+  rem use TMR4
+  rem interval:1/32KHz
+  rem  if you use graphic mode, you
+  rem need reculculation of interval.
+ rem setdma
+  rem initialize DMA
+  rem args
+   rem ARGS(1):buffer
+   rem ARGS(2):buffer size
+  rem for detail, ref:body
+ rem clrbuf
+  rem clear buffer
+  rem clear audio buffer with 0x7F
+ rem inimus
+  rem initialize for music
+  rem ARG(1):filename
+ rem diptim
+  rem display time
+ rem mustas
+  rem do music task
+  rem  this function must be called 
+  rem every 1 frame, or overrun.
+ rem stpmus
+  rem  deinit dma and timers to stop 
+  rem music.
+
+
+rem ===================
+rem ====source code====
+rem ===================
+
+
 label main
+rem  usegraphic
   cls
   var i,a
   DIM S(512)
@@ -64,10 +105,7 @@ rem time base setup
 rem dma setup
   gosub setdma,S,2048
 
-  for i=0 to 1024*2
-rem set default data
-    poke s+i,0x7F AND 0xFF
-  next
+  gosub clrbuf
 
 rem init for music
   gosub inimus,"music.raw"
@@ -83,10 +121,21 @@ rem call music task
     gosub dsptim
     gosub mustas
 rem hit any key to exit
-    if inkey() then gosub finmus
+    if inkey() then
+      gosub stpmus
+      fclose
+    endif
   wend
 
 end
+
+rem clear buffer
+label clrbuf
+  var i
+  for i=0 to 511
+    s(i)=0x7F7F7F7F
+  next
+return
 
 rem display time @(0,3)
 label dsptim
@@ -96,31 +145,6 @@ label dsptim
   color 7
   print s/60%10;":";s%60/10;s%60%10
 return
-
-rem ==DMA addresses==
-rem for common register
-  rem DMACON     0xBF883000 : 0
-  rem DMASTAT    0xBF883010 : 1
-  rem DMAADDR    0xBF883020 : 2
-
-rem for each cannel
-  rem DCH0CON    0xBF883060 : 0
-  rem DCH0ECON   0xBF883070 : 1
-  rem DCH0INT    0xBF883080 : 2
-  rem DCH0SSA    0xBF883090 : 3
-  rem DCH0DSA    0xBF8830A0 : 4
-  rem DCH0SSIZ   0xBF8830B0 : 5
-  rem DCH0DSIZ   0xBF8830C0 : 6
-  rem DCH0SPTR   0xBF8830D0 : 7
-  rem DCH0DPTR   0xBF8830E0 : 8
-  rem DCH0CSIZ   0xBF8830F0 : 9
-  rem DCH0CPTR   0xBF883100 : 10
-
-rem maskoffs
-  rem none   : 0
-  rem clear  : 1
-  rem set    : 2
-  rem invers : 3
 
 rem dma init
 rem args(1):buff pointer
@@ -134,27 +158,29 @@ rem destination : OC4RS
 
 label setdma
   var A
-rem dma on
   A = 0xBF883000
-  A((0*4+2)) = 0x00008000
+rem dma on
+  A(2) = 0x00008000
   A = 0xBF883060
 rem enable ch0 (auto mode,pri lv=2)
-  A(0*4+0) = 0x00000012
+  A(0) = 0x00000012
 rem transfer @irq tmr4(19)
-  A((1*4+0)) = (19<<8)OR(1<<4)
+rem (19<<8) OR (1<<4)
+  A(4) = 0x1310
 rem set source addr
-  A((3*4+0)) = ARGS(1) AND 0x1FFFFFFF
+  A(12) = ARGS(1) AND 0x1FFFFFFF
 rem set dest addr OC4RS
-  A((4*4+0)) = 0xBF803620 AND 0x1FFFFFFF
+rem (0x8F803620 AND 0x1FFFFFFF)
+  A(16) = 0x1F803620
 rem set source size [0(as 65536)-65535]
-  A((5*4+0)) = ARGS(2)
+  A(20) = ARGS(2)
 rem set dist size
-  A((6*4+0)) = 1
+  A(24) = 1
 rem set cell size
-  A((9*4+0)) = 1
+  A(36) = 1
   gosub clrflg
 rem turn on dma ch0
-  A(0*4+2) = 0x00000080
+  A(2) = 0x00000080
 return
 
 rem dma abort
@@ -162,7 +188,7 @@ label dmaabo
 rem force abort
   var A
   A = 0xBF883060
-  A((1*4+2)) =(1<<6)
+  A(6) =0x40
 return
 
 rem dma clear if flags
@@ -170,37 +196,40 @@ label clrflg
 rem clear if flags(Half and full trans)
   var A
   A = 0xBF883060
-  A((2*4+1)) = 0x00FF00FF
+  A(9) = 0x00FF00FF
 return
 
 rem dma trans half?
 label dmishf
   var A
   A = 0xBF883080
-return A(0) AND (1 << 6)
+return A(0) AND 0x40
 
 rem dma trans finished?
 label dmisfi
   var A
   A = 0xBF883080
-return A(0) AND (1 << 7)
+return A(0) AND 0x80
 
 rem set base timer(timer4)
 rem to generate interval (sampling rate 32kHz)
 label setbst
   var A
   A = 0xBF800C00
-  A((0*4+0)) = 0x00000000
+  A(0) = 0x00000000
 rem TMR4 reset
-  A((1*4+0)) = 0x0000
-rem PR4 set 3.58*16MHz/32kHz = 1790
-  A((2*4+0)) = 1790
+  A(4) = 0x0000
+rem PR4 set (3.58*16)MHz/32kHz = 1790
+rem  if you use graphic mode, set this
+rem value to
+rem (3.58*15)MHz/32KHz = 1678
+  A(8) = 1790
 rem disable interrupt
   A = 0xBF881060
-  A(0*4+1) = 0x00080000
+  A(1) = 0x00080000
 rem tmr start
   A = 0xBF800C00
-  A((0*4+2)) = 0x00008000
+  A(2) = 0x00008000
 return
 
 label setpwm
@@ -211,15 +240,15 @@ rem **Pin setting**
 rem **TIMR3 settings**
   A = 0xBF800A00
 rem clear TMR3
-  A((1*4+0)) = 0x0000
+  A(4) = 0x0000
 rem clear PR3
-  A((2*4+0)) = 0x0100
+  A(8) = 0x0100
 rem start TMR3
-  A((0*4+0)) = 0x8000
+  A(0) = 0x8000
 rem **OC4 setting**
   A = 0xBF803600
-  A((0*4+0)) = 0x000e
-  A((0*4+2)) = 0x8000
+  A(0) = 0x000e
+  A(2) = 0x8000
 return
 
 rem stop sound
@@ -227,10 +256,10 @@ label stopsn
   var A
 rem stop TMR3
   A = 0xBF800A00
-  A((0*4+1)) = 0x8000
+  A(1) = 0x8000
 rem stop TMR4
   A = 0xBF800C00
-  A((0*4+1)) = 0x8000  
+  A(1) = 0x8000  
 return
 
 rem init for music
@@ -243,23 +272,28 @@ rem call every 1F
 label mustas
   var b
   b=0
+rem done until half?
   if gosub(dmishf) then
     b=s
   elseif gosub(dmisfi) then
+rem finished?
     b=s+1024
     c=c+1
   endif
+rem any buff is empty?
   if b then
+rem turn off flags
     gosub clrflg
+rem is end of music?
     if fget(b,1024)=0 then
-      gosub finmus
+      gosub clrbuf
+      fseek 0
     endif
   endif
 return
 
 rem deinit for music.
-label finmus
+label stpmus
   gosub stopsn
   gosub dmaabo
-  fclose
 end
